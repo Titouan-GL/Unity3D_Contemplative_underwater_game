@@ -1,0 +1,114 @@
+// Each #kernel tells which function to compile; you can have many kernels
+#pragma kernel CSMain
+
+// Create a RenderTexture with enableRandomWrite flag and set it
+// with cs.SetTexture
+
+struct boidStruct
+{
+    float3 position;
+    float3 velocity;
+    float3 debug;
+};
+
+struct schoolStruct
+{
+    float3 target;
+    float zoneRepulsion;
+    float zoneAlignement;
+    float zoneAttraction;
+    float forceRepulsion;
+    float forceAlignement;
+    float forceAttraction;
+    float forceTarget;
+    float maxSpeed;
+    float minSpeed;
+    int nbBoids;
+};
+
+
+
+RWStructuredBuffer<schoolStruct> SchoolBuffer;
+RWStructuredBuffer<boidStruct> BoidBuffer;
+float deltaTime;
+int schoolIndex;
+int schoolStartIndex;
+
+[numthreads(1,1,1)]
+void CSMain (uint3 id : SV_DispatchThreadID)
+{
+    int indexBoid = id.x + schoolStartIndex;
+    //float3 target = float3(SchoolBuffer[schoolIndex].targetx, SchoolBuffer[schoolIndex].targety, SchoolBuffer[schoolIndex].targetz);
+    float3 sumForces = float3(0.0, 0.0, 0.0);
+    float nbForcesApplied = 0;
+    BoidBuffer[indexBoid].debug.r = schoolStartIndex + SchoolBuffer[schoolIndex].nbBoids;
+    BoidBuffer[indexBoid].debug.g = schoolStartIndex;
+    for(int i = schoolStartIndex; i < schoolStartIndex + SchoolBuffer[schoolIndex].nbBoids; i++)
+    {
+        float distToOtherBoid = distance(BoidBuffer[i].position, BoidBuffer[indexBoid].position);
+        float3 normalizedVector = distToOtherBoid == 0 ? float3(0, 0, 0) : normalize(BoidBuffer[i].position- BoidBuffer[indexBoid].position);
+        //Si on doit prendre en compte cet autre boid (plus grande zone de perception)
+        float3 forceToApply = float3(0.0, 0.0, 0.0);
+        //Si on est entre attraction et alignement
+        if (distToOtherBoid > SchoolBuffer[schoolIndex].zoneAlignement)
+        {
+            //On est dans la zone d'attraction uniquement
+            forceToApply = normalizedVector * SchoolBuffer[schoolIndex].forceAttraction;
+            float normalizedDistanceToNextZone = ((distToOtherBoid - SchoolBuffer[schoolIndex].zoneAlignement) / (SchoolBuffer[schoolIndex].zoneAttraction - SchoolBuffer[schoolIndex].zoneAlignement));
+            float boostForce = (4 * normalizedDistanceToNextZone);
+            forceToApply = normalizedVector * SchoolBuffer[schoolIndex].forceAttraction * boostForce;
+        }
+        else
+        {
+            //On est dans alignement, mais est on hors de répulsion ?
+            if (distToOtherBoid > SchoolBuffer[schoolIndex].zoneRepulsion)
+            {
+                //On est dans la zone d'alignement uniquement
+                forceToApply = length(BoidBuffer[i].velocity) == 0 ? float3(0, 0, 0) : normalize(BoidBuffer[i].velocity) * SchoolBuffer[schoolIndex].forceAlignement;
+            }
+            else
+            {
+                //On est dans la zone de repulsion
+                float normalizedDistanceToPreviousZone = 1 - (distToOtherBoid / SchoolBuffer[schoolIndex].zoneRepulsion);
+                float boostForce = (4 * normalizedDistanceToPreviousZone);
+                forceToApply = normalizedVector * -1 * (SchoolBuffer[schoolIndex].forceRepulsion * boostForce);
+
+            }
+        }
+        sumForces += forceToApply;
+        nbForcesApplied++;
+        
+    
+    }
+    //On fait la moyenne des forces, ce qui nous rend indépendant du nombre de boids
+
+    float distanceToTarget = distance(SchoolBuffer[schoolIndex].target, BoidBuffer[indexBoid].position);
+    float3 vecTargetNormalized = SchoolBuffer[schoolIndex].target == BoidBuffer[indexBoid].position ? float3(0, 0, 0) : normalize(SchoolBuffer[schoolIndex].target- BoidBuffer[indexBoid].position);
+    if (distanceToTarget > 1)
+    {
+        float3 forceToTarget = vecTargetNormalized * SchoolBuffer[schoolIndex].forceTarget * distanceToTarget;
+        sumForces += forceToTarget;
+        nbForcesApplied++;
+    }
+    sumForces /= max(nbForcesApplied, 1);
+
+    
+    //On freine
+    float dotProduct = dot(sumForces, BoidBuffer[indexBoid].velocity);
+    float lengthProduct = length(sumForces) * length(BoidBuffer[indexBoid].velocity);
+    if(lengthProduct != 0 && deltaTime != 0 && dotProduct < lengthProduct){
+        float angle = acos(dotProduct / lengthProduct);
+        BoidBuffer[indexBoid].velocity += BoidBuffer[indexBoid].velocity * -2 * angle / 180.0f * deltaTime;
+    }
+    //on applique les forces
+    BoidBuffer[indexBoid].velocity += sumForces * deltaTime;
+    //On limite la vitesse
+    if(length(BoidBuffer[indexBoid].velocity) != 0){
+        if (length(BoidBuffer[indexBoid].velocity) > SchoolBuffer[schoolIndex].maxSpeed )
+            {BoidBuffer[indexBoid].velocity = normalize(BoidBuffer[indexBoid].velocity) * SchoolBuffer[schoolIndex].maxSpeed;}
+        if (length(BoidBuffer[indexBoid].velocity) < SchoolBuffer[schoolIndex].minSpeed)
+            {BoidBuffer[indexBoid].velocity = normalize(BoidBuffer[indexBoid].velocity) * SchoolBuffer[schoolIndex].minSpeed;}
+    }
+
+    BoidBuffer[indexBoid].position += BoidBuffer[indexBoid].velocity * deltaTime;
+}
